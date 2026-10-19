@@ -1,0 +1,10 @@
+/etc/systemd/system/deli-installer.service
+/etc/systemd/system/multi-user.target.wants/deli-installer.service
+/etc/systemd/system/getty@tty2.service.d
+/etc/systemd/network/80-deli-live.network
+/etc/systemd/system-preset/10-deli-live.preset
+/etc/systemd/resolved.conf.d/80-deli-live.conf
+/etc/ssh/sshd_config.d/80-deli-live.conf
+/etc/profile.d/90-deli-live.sh
+/usr/local/bin/deli
+/root/.ssh

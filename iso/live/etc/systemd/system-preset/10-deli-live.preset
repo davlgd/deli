@@ -1,0 +1,8 @@
+# Live session only. It boots without a machine-id, so systemd applies the
+# presets at boot, and they enable every unit no rule names: networkd alone
+# configures the network, and nothing else listens on it but sshd.
+disable dhcpcd.service
+disable git-daemon.service
+disable git-daemon.socket
+disable rsync.service
+disable rsync.socket

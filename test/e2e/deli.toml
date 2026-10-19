@@ -1,0 +1,27 @@
+# End-to-end test configuration. @SSH_KEY@ is replaced by the test runner.
+[storage]
+disk = "auto"
+
+[system]
+hostname = "deli-e2e"
+timezone = "Europe/Berlin"
+# Not in the stage: exercises localedef in the target.
+locale = "de_DE.UTF-8"
+keymap = "de"
+
+[admin]
+name = "ops"
+authorized_keys = ["@SSH_KEY@"]
+
+[repositories]
+enable = ["perl"]
+sync = true
+
+[packages]
+world = ["htop"]
+
+[live]
+authorized_keys = ["@SSH_KEY@"]
+
+[install]
+confirm = false

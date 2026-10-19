@@ -1,0 +1,84 @@
+# deli.toml: everything deli needs to install a server without asking.
+# Every key is optional except a way to log in ([admin] keys, a GitHub user
+# or a password hash). Unknown keys are errors.
+
+[storage]
+# A device (/dev/sda, /dev/disk/by-id/…) or "auto", which only works when
+# exactly one fixed disk is present besides the installation medium.
+disk = "/dev/disk/by-id/nvme-Samsung_SSD_980_PRO_1TB_S5GXNX0R123456"
+# simple: ESP + root. server: also separate /var and /home. Both take swap.
+layout = "server"
+# btrfs (subvolumes @, @home, @log, @snapshots), ext4 or xfs.
+filesystem = "btrfs"
+esp_size = "1G"
+swap = "4G"
+var_size = "50G"
+home_size = "20G"
+
+[system]
+hostname = "web01"
+timezone = "America/New_York"
+locale = "en_US.UTF-8"
+keymap = "us"
+
+[network]
+# dhcp, or static with address/gateway/dns.
+mode = "static"
+interfaces = "en*"
+address = "192.0.2.10/24"
+gateway = "192.0.2.1"
+# Resolvers; leave out (DHCP mode) to use those DHCP gives.
+dns = ["192.0.2.1"]
+# DNSSEC validation: no (default), allow-downgrade or yes. Behind a resolver
+# that strips signatures, as some ISP boxes do, validation fails every query.
+dnssec = "no"
+
+[admin]
+name = "ops"
+# Without a password hash: key logins only, and sudo does not ask.
+# password_hash = "$6$…"   # openssl passwd -6
+# Replace with yours: this one is only well formed.
+authorized_keys = ["ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIM7w6tvHPjMHe2grkjvMyevSUvyZE/gsp1Xnad41MMU0 ops@example"]
+github = "my-github-user"
+# This account administers with sudo. With sudo = false it is an ordinary
+# one, and root needs a password hash to administer with, through su.
+sudo = true
+
+[root]
+# Locked unless a hash is given. root never logs in over SSH when there is
+# an [admin] account.
+# password_hash = "$6$…"
+
+[ssh]
+enable = true
+# Defaults to off when a key is configured.
+# password_authentication = false
+
+[boot]
+# Also talk on ttyS0 (IPMI serial-over-LAN, hypervisor consoles).
+serial_console = true
+timeout = 3
+
+[repositories]
+# Exherbo repositories to add to those the installed packages come
+# from (arbor, hardware, python, virtualization, x11); their dependencies come
+# along. Each is cloned: gitlab.exherbo.org must be reachable.
+enable = ["net", "perl"]
+# cave sync and cave generate-metadata at the end of the installation: a few
+# minutes more, and gitlab.exherbo.org must be reachable.
+sync = true
+
+[packages]
+# Added to the world set, not built during the installation: the first
+# `cave resolve -x world` on the installed system builds them.
+# A name alone is enough when one category has it.
+world = ["htop", "app-editors/vim"]
+
+[live]
+# Keys allowed into the installer's live session, to watch it work.
+authorized_keys = []
+
+[install]
+# Erase the disk without asking (or boot with deli.autoinstall).
+confirm = false
+reboot = true

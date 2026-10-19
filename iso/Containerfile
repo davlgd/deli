@@ -1,0 +1,130 @@
+# The system deli's ISO boots, and the system deli installs: the same tree.
+#
+# Stages:
+#   paludis official Exherbo stage, paludis configured and synced
+#   kernel  kernel.org longterm, defconfig + kvm_guest + server.config
+#   base    paludis + the extra repositories the package set needs
+#   system  server package set + the kernel + system/ (this is what gets
+#           installed)
+#   live    system + deli and its live-only files (this is what the ISO boots)
+#
+# Only `live` changes when deli does, so the compiling stays cached.
+
+# The Exherbo stage of 2026-10-08, pinned: a new one invalidates every layer.
+ARG BASE=exherbo/exherbo-x86_64-pc-linux-gnu-gcc-base@sha256:93f1514971e04bed8f14c62bd874ef77fc522cc40cfbb37b85626253b4137f39
+
+FROM ${BASE} AS paludis
+ARG JOBS=4
+COPY paludis/ /tmp/deli-paludis/
+# In Docker, paludisbuild needs group 0 or paludis warns of "strange breakages"
+# with PTYs; the system stage takes it back out.
+# The stage builds with -march=native; the ISO must run on any x86-64-v2 CPU.
+RUN usermod -aG 0 paludisbuild \
+ && sed -i 's/-march=native/-march=x86-64-v2/' /etc/paludis/bashrc \
+ && sed -i '/build_options:/d' /etc/paludis/options.conf \
+ && sed "s/@JOBS@/${JOBS}/" /tmp/deli-paludis/options.conf >> /etc/paludis/options.conf \
+ && cave sync
+
+FROM paludis AS kernel
+ARG KERNEL_VERSION=6.18.57
+ARG JOBS=4
+COPY kernel/server.config /tmp/server.config
+RUN cave resolve -x -z --skip-phase test sys-apps/bc \
+ && cd /usr/src \
+ && curl -fsSLO "https://cdn.kernel.org/pub/linux/kernel/v${KERNEL_VERSION%%.*}.x/linux-${KERNEL_VERSION}.tar.xz" \
+ && curl -fsSL "https://cdn.kernel.org/pub/linux/kernel/v${KERNEL_VERSION%%.*}.x/sha256sums.asc" \
+    | grep " linux-${KERNEL_VERSION}.tar.xz\$" | sha256sum -c - \
+ && tar -xJf "linux-${KERNEL_VERSION}.tar.xz" \
+ && cd "linux-${KERNEL_VERSION}" \
+ && make defconfig \
+ && make kvm_guest.config \
+ && scripts/kconfig/merge_config.sh -m .config /tmp/server.config \
+ && make olddefconfig \
+ && { grep -E '^(CONFIG_|# CONFIG_.* is not set$)' /tmp/server.config | while read -r option; do \
+        grep -qxF "$option" .config || { echo "kernel option not applied: $option" >&2; exit 1; }; \
+      done; } \
+ && make -j"${JOBS}" \
+ && make modules_install INSTALL_MOD_PATH=/out INSTALL_MOD_STRIP=1 \
+ && KVER="$(make -s kernelrelease)" \
+ && cp arch/x86/boot/bzImage "/out/lib/modules/${KVER}/vmlinuz" \
+ && cp .config "/out/lib/modules/${KVER}/config" \
+ && rm -f "/out/lib/modules/${KVER}/build" "/out/lib/modules/${KVER}/source" \
+ && cd / && rm -rf /usr/src/linux-*
+
+FROM paludis AS base
+COPY repositories /tmp/deli-repositories
+# A repository is named x-<name> until a global sync after declaring it.
+RUN cave resolve -x $(grep -v '^#' /tmp/deli-repositories | sed 's|^|repository/|') \
+ && cave sync
+
+FROM base AS system
+COPY packages /tmp/deli-packages
+# systemd and coreutils are already installed: naming them rebuilds them with
+# the options from options.conf (efi for systemd-boot, xattr for dracut).
+RUN cave resolve -x --skip-phase test sys-apps/systemd sys-apps/coreutils \
+ && test -f /usr/x86_64-pc-linux-gnu/lib/systemd/boot/efi/systemd-bootx64.efi
+# cave exits 0 without installing anything when it needs a permission it was
+# not given (here: Sphinx wants an older docutils than the stage's): check
+# that every requested package really is installed.
+RUN cave resolve -x -z --skip-phase test \
+      --permit-downgrade dev-python/docutils --permit-old-version dev-python/docutils \
+      $(grep -v '^#' /tmp/deli-packages) \
+ && for p in $(grep -v '^#' /tmp/deli-packages); do \
+      cave print-ids -m "$p::installed" | grep -q . || { echo "not installed: $p" >&2; exit 1; }; \
+    done \
+ && rm -rf /var/cache/paludis/distfiles/* /var/tmp/paludis/build/* /tmp/deli-*
+# /lib is /usr/host/lib here: install the modules where kmod looks for them.
+COPY --from=kernel /out/lib/modules/ /usr/x86_64-pc-linux-gnu/lib/modules/
+RUN for k in /usr/x86_64-pc-linux-gnu/lib/modules/*; do depmod -a "${k##*/}"; done
+# Terminals that announce a name ncurses only knows under another one: without
+# an entry, nano and less refuse to start over SSH from them.
+RUN test -e /usr/share/terminfo/g/ghostty \
+ && ln -s ../g/ghostty /usr/share/terminfo/x/xterm-ghostty
+# Nothing is built after this stage: undo the container-only group membership,
+# installed systems must not give the build user root's group; and builds on
+# installed systems use their own processor count, not the build host's.
+COPY system/ /
+RUN gpasswd -d paludisbuild root \
+ && ! id -nG paludisbuild | grep -qw root \
+ && sed -i 's/ jobs=[0-9]*//' /etc/paludis/options.conf
+# systemd applies presets by itself on a first boot only, which installed
+# systems and the cloud image never have: what a server needs from Exherbo's
+# presets is enabled here. getty@ gives a
+# login on tty1 and, through its autovt@ alias, on the other consoles;
+# remote-fs.target mounts the network filesystems in fstab at boot;
+# systemd-boot-update keeps the boot loader on the ESP up to date.
+RUN systemctl enable getty@.service remote-fs.target systemd-boot-update.service \
+ && test -L /etc/systemd/system/getty.target.wants/getty@tty1.service \
+ && test -L /etc/systemd/system/autovt@.service
+
+FROM system AS cloud
+# cloud-init and growpart come from the davlgd repository, which Exherbo's
+# indexes do not list; cloud-init's units talk to it through `nc -U`, which
+# OpenBSD's netcat, in the net repository, provides. VirtIO devices load no
+# firmware and the host applies the CPU microcode: the image goes without
+# both. net is added first: cave refuses to add a repository while a
+# declared one has never been synced. cloud-init 26.2-r2 is the first to sync
+# the repositories and install the packages of a cloud-config.
+RUN usermod -aG 0 paludisbuild \
+ && cave resolve -x repository/net
+COPY cloud/ /
+RUN cave sync \
+ && cave resolve -x -z --skip-phase test '>=virtualization-guest/cloud-init-26.2-r2' sys-fs/growpart net/netcat-openbsd \
+ && for p in '>=virtualization-guest/cloud-init-26.2-r2' sys-fs/growpart net/netcat-openbsd; do \
+      cave print-ids -m "$p::installed" | grep -q . || { echo "not installed: $p" >&2; exit 1; }; \
+    done \
+ && cave uninstall -x firmware/linux-firmware firmware/intel-microcode \
+ && gpasswd -d paludisbuild root \
+ && rm -rf /var/cache/paludis/distfiles/* /var/tmp/paludis/build/*
+# What deli's installation enables, and cloud-init's stages: cloud-init
+# writes the network, accounts and keys on first boot.
+RUN systemctl enable systemd-networkd.service systemd-resolved.service systemd-timesyncd.service sshd.service \
+      cloud-init-main.service cloud-init-local.service cloud-init-network.service \
+      cloud-config.service cloud-final.service
+
+FROM system AS live
+COPY live/ /
+COPY deli /usr/local/bin/deli
+COPY server.toml /usr/share/deli/server.toml
+RUN systemctl enable deli-installer.service systemd-networkd.service systemd-resolved.service \
+ && chmod 0755 /usr/local/bin/deli

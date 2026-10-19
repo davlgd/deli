@@ -1,0 +1,24 @@
+[Unit]
+Description=deli installer
+ConditionKernelCommandLine=deli.live
+After=systemd-user-sessions.service systemd-networkd.service
+Conflicts=getty@tty1.service
+
+[Service]
+Type=idle
+# Installed or not, the console ends in a root shell, unless deli reboots.
+ExecStart=/bin/bash -c '/usr/local/bin/deli install; exec /bin/bash --login'
+Environment=TERM=linux HOME=/root
+StandardInput=tty
+StandardOutput=tty
+StandardError=tty
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+TTYVTDisallocate=yes
+KillMode=process
+IgnoreSIGPIPE=no
+SendSIGHUP=yes
+
+[Install]
+WantedBy=multi-user.target

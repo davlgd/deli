@@ -1,0 +1,7 @@
+# Repositories enabled on top of arbor, in the live and installed systems.
+# python: Sphinx, which btrfs-progs needs to build its man pages.
+python
+# hardware: linux-firmware and intel-microcode (it brings x11 along, its dependency).
+hardware
+# virtualization: qemu-guest-agent, so hypervisors see the guest (IP, clean shutdown).
+virtualization

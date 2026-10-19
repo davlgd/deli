@@ -1,0 +1,9 @@
+# Live session only: DHCP on every wired interface.
+[Match]
+Name=en* eth*
+
+[Network]
+DHCP=yes
+
+[DHCPv4]
+ClientIdentifier=mac

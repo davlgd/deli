@@ -1,0 +1,103 @@
+name: Release images
+
+# Builds the ISO and the cloud image for a published release and attaches
+# them, with their SHA-256, to that release. Run it by hand to rebuild the
+# images of an existing release, or to resume a build a time limit stopped:
+# each stage is cached once built.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to build and attach the images to (vX.Y.Z)
+        required: true
+
+permissions:
+  contents: write
+  # BuildKit's cache lives in the GitHub Container Registry: an Actions cache
+  # written for one tag is invisible to the next release's.
+  packages: write
+
+concurrency:
+  group: release-${{ github.event.release.tag_name || inputs.tag }}
+
+jobs:
+  images:
+    name: Build the images
+    # Pinned: Docker's storage settings below depend on the image.
+    runs-on: ubuntu-24.04
+    # The first build compiles the whole system from source.
+    timeout-minutes: 360
+    env:
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TAG }}
+
+      - name: Check the tag against Cargo.toml
+        id: version
+        run: |
+          version="${TAG#v}"
+          crate="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)"
+          if [ "$version" != "$crate" ]; then
+            echo "tag $TAG does not match version $crate in Cargo.toml" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      # The images, BuildKit's state, the root filesystems' exports, the ISO
+      # and the cloud image need tens of gigabytes: Docker and the output go to the runner's
+      # larger temporary disk when it has one.
+      - name: Make room
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache /usr/share/swift
+          if mountpoint -q /mnt; then
+            sudo systemctl stop docker.service docker.socket
+            config=/etc/docker/daemon.json
+            current="$(sudo cat "$config" 2>/dev/null || echo '{}')"
+            echo "$current" | jq '. + {"data-root": "/mnt/docker"}' | sudo tee "$config"
+            sudo systemctl start docker.service
+            sudo install -d -o "$USER" /mnt/out
+            echo "OUT=/mnt/out" >> "$GITHUB_ENV"
+          else
+            echo "OUT=$PWD/out" >> "$GITHUB_ENV"
+          fi
+          df -h / /mnt
+
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Build
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          CACHE: ghcr.io/${{ github.repository_owner }}/deli-build-cache
+        run: iso/build.sh
+
+      - name: Disk use
+        if: always()
+        run: |
+          df -h / /mnt 2>/dev/null || df -h /
+          docker system df
+
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          files=()
+          for file in "$OUT/deli-$VERSION-x86_64.iso" "$OUT/deli-$VERSION-x86_64-cloud.qcow2"; do
+            # GitHub refuses release assets of 2 GiB or more.
+            size="$(stat -c %s "$file")"
+            if [ "$size" -ge $((2 << 30)) ]; then
+              echo "$file is $size bytes, too large for a release asset" >&2
+              exit 1
+            fi
+            files+=("$file" "$file.sha256")
+          done
+          gh release upload "$TAG" "${files[@]}" --clobber

@@ -1,0 +1,24 @@
+# Installed on top of the Exherbo stage, in the live system and the installed one.
+# Exherbo builds from source: every line costs build time.
+
+# Boot: initramfs (dmsquash-live for the ISO, dm for it), kernel modules
+sys-boot/dracut
+sys-fs/lvm2
+
+# Firmware: what network and storage controllers load, and CPU microcode,
+# which dracut puts in front of every initramfs (AMD's ships in linux-firmware).
+firmware/linux-firmware
+firmware/intel-microcode
+
+# Filesystems the installer can create
+sys-fs/btrfs-progs
+sys-fs/dosfstools
+sys-fs/xfsprogs
+sys-fs/squashfs-tools
+
+# Guests of a hypervisor report their address and shut down cleanly.
+virtualization-guest/qemu-guest-agent
+
+# Administration
+app-admin/sudo
+app-editors/nano
